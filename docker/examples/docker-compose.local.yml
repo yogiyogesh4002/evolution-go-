@@ -1,0 +1,79 @@
+# Local development stack for Evolution Go.
+# Run with:  docker compose -f docker/examples/docker-compose.local.yml up -d
+services:
+  evolution-go:
+    image: evoapicloud/evolution-go:latest
+    container_name: evolution-go
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SERVER_PORT: 8080
+      CLIENT_NAME: "evolution"
+      TZ: "Asia/Kolkata"
+
+      GLOBAL_API_KEY: "429683C4C977415CAAFCCE10F7D57E11"
+
+      POSTGRES_AUTH_DB: "postgresql://postgres:postgres@postgres:5432/evogo_auth?sslmode=disable"
+      POSTGRES_USERS_DB: "postgresql://postgres:postgres@postgres:5432/evogo_users?sslmode=disable"
+      DATABASE_SAVE_MESSAGES: "false"
+
+      WADEBUG: "INFO"
+      LOGTYPE: "console"
+      LOG_DIRECTORY: "/app/logs"
+
+      CONNECT_ON_STARTUP: "false"
+      WEBHOOK_FILES: "true"
+      OS_NAME: "Evolution GO"
+
+      # Off for local dev — enable when you need them.
+      WEBHOOK_URL: ""
+      AMQP_GLOBAL_ENABLED: "false"
+      NATS_GLOBAL_ENABLED: "false"
+      MINIO_ENABLED: "false"
+
+      EVENT_IGNORE_GROUP: "false"
+      EVENT_IGNORE_STATUS: "true"
+      QRCODE_MAX_COUNT: "5"
+    volumes:
+      - evolution_data:/app/dbdata
+      - evolution_logs:/app/logs
+      # English manager UI: serve the repo's translated manager/dist instead of
+      # the Portuguese copy baked into the image. Drop this line once you build
+      # your own image, which picks the translated files up via the Dockerfile.
+      - ../../manager/dist:/app/manager/dist:ro
+    networks:
+      - evolution_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: evolution-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - evolution_network
+
+volumes:
+  evolution_data:
+  evolution_logs:
+  postgres_data:
+
+networks:
+  evolution_network:
+    driver: bridge
