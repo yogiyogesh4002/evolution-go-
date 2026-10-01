@@ -18,8 +18,10 @@ services:
       POSTGRES_USERS_DB: "postgresql://postgres:postgres@postgres:5432/evogo_users?sslmode=disable"
       DATABASE_SAVE_MESSAGES: "false"
 
-      WADEBUG: "INFO"
-      LOGTYPE: "console"
+      # Real env names read by the code. Upstream's compose files use stale
+      # WADEBUG/LOGTYPE keys, which the app silently ignores.
+      DEBUG_ENABLED: "0"
+      LOG_TYPE: "console"
       LOG_DIRECTORY: "/app/logs"
 
       CONNECT_ON_STARTUP: "false"
