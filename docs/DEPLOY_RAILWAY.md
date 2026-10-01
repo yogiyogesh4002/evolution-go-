@@ -44,8 +44,11 @@ Service → **Settings** → **Volumes** → add a volume with mount path:
 This is where `users.db` (your WhatsApp session credentials) lives. Without the
 volume, every redeploy wipes the session and you re-scan the QR code.
 
-Railway allows one volume per service. Leave `LOG_DIRECTORY` unset so logs go to
-stdout, where Railway captures them anyway.
+Railway allows one volume per service, so point `LOG_DIRECTORY` at `/tmp/logs`
+(step 4) rather than the volume — per-instance log files would otherwise compete
+with the session database for volume space. Leaving it unset is not harmful but
+logs a `Falha ao criar diretório base de logs` error on every boot, because the
+logger calls `os.MkdirAll("")`. Railway captures stdout regardless.
 
 ## 3. Add Postgres and create two databases
 
@@ -78,6 +81,7 @@ Railway variable references; paste them literally and Railway resolves them.
 | `CONNECT_ON_STARTUP` | `true` |
 | `OS_NAME` | `Evolution GO` |
 | `LOG_TYPE` | `console` |
+| `LOG_DIRECTORY` | `/tmp/logs` |
 | `DEBUG_ENABLED` | `0` |
 | `WEBHOOK_FILES` | `true` |
 | `EVENT_IGNORE_STATUS` | `true` |
