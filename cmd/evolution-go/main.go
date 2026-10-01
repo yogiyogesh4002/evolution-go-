@@ -414,7 +414,7 @@ func main() {
 	core.StartHeartbeat(heartbeatCtx, runtimeCtx, startTime)
 
 	srv := &http.Server{
-		Addr:    ":" + os.Getenv("SERVER_PORT"),
+		Addr:    ":" + serverPort(),
 		Handler: r,
 	}
 
@@ -422,7 +422,7 @@ func main() {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
-		logger.LogInfo("Iniciando servidor na porta %s", os.Getenv("SERVER_PORT"))
+		logger.LogInfo("Iniciando servidor na porta %s", serverPort())
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("server error: %v", err)
 		}
@@ -444,4 +444,17 @@ func main() {
 	}
 
 	logger.LogInfo("[SHUTDOWN] Server exited")
+}
+
+// serverPort resolves the listen port. SERVER_PORT wins so existing deploys are
+// untouched; PORT is the fallback for hosts that inject it (Railway, Render,
+// Fly, Heroku). Defaults to 8080 rather than binding a random port when unset.
+func serverPort() string {
+	if p := strings.TrimSpace(os.Getenv("SERVER_PORT")); p != "" {
+		return p
+	}
+	if p := strings.TrimSpace(os.Getenv("PORT")); p != "" {
+		return p
+	}
+	return "8080"
 }
