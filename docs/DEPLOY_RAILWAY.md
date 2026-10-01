@@ -33,42 +33,57 @@ four hold.
 stateful and tied to one SQLite file; a second replica would fight the first over
 the same session and disconnect it.
 
-## 2. Add the persistent volume — do not skip this
+## 2. State: Postgres, not a volume
 
-Service → **Settings** → **Volumes** → add a volume with mount path:
+Where the WhatsApp session lives depends entirely on whether
+`POSTGRES_AUTH_DB` is set:
 
-```
-/app/dbdata
-```
+- **`POSTGRES_AUTH_DB` set (recommended on Railway).** `initAuthDB` returns
+  early (`cmd/evolution-go/main.go:273`) and `whatsmeow` opens a Postgres
+  session store. Nothing is written to `dbdata/`, so **no volume is needed** —
+  the container is disk-stateless and survives redeploys cleanly.
+- **`POSTGRES_AUTH_DB` empty.** Session credentials fall back to SQLite at
+  `/app/dbdata/`. You then *must* mount a volume at `/app/dbdata`
+  (Service → **Settings** → **Volumes**) or every redeploy wipes the session and
+  forces a QR re-scan.
 
-This is where `users.db` (your WhatsApp session credentials) lives. Without the
-volume, every redeploy wipes the session and you re-scan the QR code.
+Step 4 sets `POSTGRES_AUTH_DB`, so the volume is optional. Mounting one anyway
+is harmless.
 
-Railway allows one volume per service, so point `LOG_DIRECTORY` at `/tmp/logs`
-(step 4) rather than the volume — per-instance log files would otherwise compete
-with the session database for volume space. Leaving it unset is not harmful but
+Set `LOG_DIRECTORY` to `/tmp/logs` either way. Leaving it unset is not fatal but
 logs a `Falha ao criar diretório base de logs` error on every boot, because the
-logger calls `os.MkdirAll("")`. Railway captures stdout regardless.
+logger calls `os.MkdirAll("")` (`pkg/logger/logger.go:39`). Railway captures
+stdout regardless.
 
-## 3. Add Postgres and create two databases
+## 3. Add Postgres
 
-Add a **Postgres** service to the project. The app needs *two* databases, which
-Railway does not create for you.
+Add a **Postgres** service to the project. That is all — you do **not** need to
+create the databases by hand. `ensureDBExists` (`pkg/config/config.go:79`)
+connects to the `postgres` maintenance database, checks `pg_database`, and runs
+`CREATE DATABASE` itself; tables then come from `db.AutoMigrate`. Railway's
+default user is a superuser, so it has the required privilege.
 
-Open the Postgres service → **Data** tab → run:
+Two variables matter, and they are not interchangeable:
 
-```sql
-CREATE DATABASE evogo_auth;
-CREATE DATABASE evogo_users;
-```
-
-Tables are created automatically on first boot (`db.AutoMigrate`), so only the
-databases themselves need to exist.
+- **`POSTGRES_USERS_DB` — required.** Holds the instance/message/label tables,
+  and is also what `CreateAuthDB()` connects to. If it is empty, the app exits
+  with `[CONFIG] required database configuration variables are missing`.
+- **`POSTGRES_AUTH_DB` — optional, but set it on Railway.** It is the
+  `whatsmeow` session store (`pkg/whatsmeow/service/whatsmeow.go:322`). When
+  set, `initAuthDB` returns early and **no SQLite file is used at all** — the
+  WhatsApp session lives in Postgres instead of `dbdata/main.db`.
 
 ## 4. Set environment variables
 
-On the **evolution-go** service → **Variables**. The `${{Postgres.*}}` values are
-Railway variable references; paste them literally and Railway resolves them.
+On the **evolution-go** service → **Variables** — not on the Postgres service.
+
+> **The `${{Postgres.*}}` references below only resolve if your Postgres service
+> is named exactly `Postgres`.** Railway often names it `Postgres-xxxx` or
+> similar, and an unresolved reference silently becomes an empty string — which
+> surfaces as `[CONFIG] required database configuration variables are missing`.
+> Check the service's name in the sidebar and substitute it, or use Railway's
+> **Add Reference** button, which inserts the correct name for you. See
+> *Troubleshooting* below.
 
 | Variable | Value |
 |---|---|
@@ -97,14 +112,6 @@ openssl rand -hex 16
 Note the exact env names: the code reads `DEBUG_ENABLED` and `LOG_TYPE`. The
 `WADEBUG` and `LOGTYPE` keys in the upstream compose files are stale and are
 silently ignored.
-
-### If Postgres connection fails on boot
-
-`RAILWAY_PRIVATE_DOMAIN` resolves over IPv6 on Railway's private network. If the
-logs show a dial or DNS error, switch both URLs to the public proxy host
-(`${{Postgres.RAILWAY_TCP_PROXY_DOMAIN}}` with
-`${{Postgres.RAILWAY_TCP_PROXY_PORT}}` as the port). That path is IPv4 and always
-works, at the cost of a little egress.
 
 ## 5. Expose it
 
@@ -135,3 +142,39 @@ Manager UI: `https://<your-domain>/manager`
 - **Media features** (`/send/media` document thumbnails, audio conversion) rely
   on `ffmpeg` and `pdftoppm` from the runtime image — they work on Railway
   because the Dockerfile installs them.
+
+## Troubleshooting
+
+### `[CONFIG] required database configuration variables are missing`
+
+`POSTGRES_USERS_DB` resolved to an empty string. The check
+(`pkg/config/config.go:222`) fails only when it is empty *and* the discrete
+`POSTGRES_HOST/PORT/USER/PASSWORD/DB` set is incomplete. In order of likelihood:
+
+1. **Postgres service name mismatch.** `${{Postgres.PGUSER}}` requires a service
+   named exactly `Postgres`. Unresolved references become empty.
+2. **Variables set on the wrong service** — they must be on `evolution-go`.
+3. **Postgres service not linked** to the app service.
+
+The reference-free fix, which works regardless of naming: open the Postgres
+service → **Variables**, copy the literal values, and set the URLs by hand on
+the `evolution-go` service:
+
+```
+POSTGRES_USERS_DB=postgresql://postgres:<PGPASSWORD>@<RAILWAY_PRIVATE_DOMAIN>:5432/evogo_users?sslmode=disable
+POSTGRES_AUTH_DB=postgresql://postgres:<PGPASSWORD>@<RAILWAY_PRIVATE_DOMAIN>:5432/evogo_auth?sslmode=disable
+```
+
+Both databases are created automatically on boot, so the names need not exist
+yet. Confirm the values landed by checking the deploy log for
+`Connecting to database on: ...` (`pkg/config/config.go:145`) — an empty host
+there means the variable is still unresolved.
+
+### If Postgres connects but the dial fails
+
+`RAILWAY_PRIVATE_DOMAIN` resolves over IPv6 on Railway's private network. If the
+logs show a dial or DNS error, switch both URLs to the public proxy host
+(`${{Postgres.RAILWAY_TCP_PROXY_DOMAIN}}` with
+`${{Postgres.RAILWAY_TCP_PROXY_PORT}}` as the port). That path is IPv4 and always
+works, at the cost of a little egress.
+
