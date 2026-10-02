@@ -87,7 +87,7 @@ On the **evolution-go** service → **Variables** — not on the Postgres servic
 
 | Variable | Value |
 |---|---|
-| `SERVER_PORT` | `8080` |
+| `SERVER_PORT` | **do not set it** — see below |
 | `GLOBAL_API_KEY` | **generate a new random key — see below** |
 | `CLIENT_NAME` | `evolution` |
 | `POSTGRES_AUTH_DB` | `postgresql://${{Postgres.PGUSER}}:${{Postgres.PGPASSWORD}}@${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:5432/evogo_auth?sslmode=disable` |
@@ -102,6 +102,19 @@ On the **evolution-go** service → **Variables** — not on the Postgres servic
 | `EVENT_IGNORE_STATUS` | `true` |
 | `QRCODE_MAX_COUNT` | `5` |
 | `TZ` | `Asia/Kolkata` |
+
+### Leave `SERVER_PORT` unset on Railway
+
+`serverPort()` (`cmd/evolution-go/main.go`) resolves the listen port as
+`SERVER_PORT` → `PORT` → `8080`, with `SERVER_PORT` winning so existing deploys
+keep their behaviour. Railway injects its own `PORT` and dials *that* port, so
+setting `SERVER_PORT` makes the app listen somewhere the proxy is not looking.
+The symptom is a 502 with `connection dial timeout` and an empty
+`upstreamAddress` — the build and boot both succeed, and the app serves nothing.
+
+Leave `SERVER_PORT` out and the `PORT` fallback lines the app up with the proxy
+automatically. If you must pin it, set the same value as the target port under
+Settings → Networking so the two agree.
 
 Generate the API key — never reuse the one in `.env.example`, which is public:
 
@@ -151,10 +164,20 @@ Manager UI: `https://<your-domain>/manager`
 (`pkg/config/config.go:222`) fails only when it is empty *and* the discrete
 `POSTGRES_HOST/PORT/USER/PASSWORD/DB` set is incomplete. In order of likelihood:
 
-1. **Postgres service name mismatch.** `${{Postgres.PGUSER}}` requires a service
+1. **Variable changes were never applied.** Railway *stages* edits to the
+   Variables tab. A `Deploy` or `Apply N changes` banner means your variables
+   are still pending — the service keeps redeploying with the previous
+   environment, so the app sees nothing. **Click it.** This is the single most
+   common cause, and the logs look identical to a genuinely missing variable.
+2. **Postgres service name mismatch.** `${{Postgres.PGUSER}}` requires a service
    named exactly `Postgres`. Unresolved references become empty.
-2. **Variables set on the wrong service** — they must be on `evolution-go`.
-3. **Postgres service not linked** to the app service.
+3. **Variables set on the wrong service** — they must be on `evolution-go`.
+4. **Wrong Railway environment** — check you are editing `production` and not a
+   `staging`/PR environment.
+
+Since 0.7.2 the fatal is preceded by a line reporting which variables the
+process actually saw (names and lengths only, never values), which distinguishes
+these cases immediately.
 
 The reference-free fix, which works regardless of naming: open the Postgres
 service → **Variables**, copy the literal values, and set the URLs by hand on
@@ -169,6 +192,21 @@ Both databases are created automatically on boot, so the names need not exist
 yet. Confirm the values landed by checking the deploy log for
 `Connecting to database on: ...` (`pkg/config/config.go:145`) — an empty host
 there means the variable is still unresolved.
+
+### 502 `connection dial timeout`, empty `upstreamAddress`
+
+Railway's proxy reached the container but found nothing listening on the port it
+dialled. Almost always `SERVER_PORT` is set and is overriding Railway's `PORT`
+— delete `SERVER_PORT` (see above). Confirm from the deploy log which port the
+app actually bound:
+
+```
+[INFO] Iniciando servidor na porta <port>
+```
+
+If that number differs from the target port under Settings → Networking, that is
+the mismatch. If the line is absent entirely, the process is not reaching
+`ListenAndServe` and the problem is earlier in boot, not the port.
 
 ### If Postgres connects but the dial fails
 
